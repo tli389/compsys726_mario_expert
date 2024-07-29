@@ -29,7 +29,7 @@ class MarioController(MarioEnvironment):
 
     def __init__(
         self,
-        act_freq: int = 10,
+        act_freq: int = 1,
         emulation_speed: int = 0,
         headless: bool = False,
     ) -> None:
@@ -80,6 +80,7 @@ class MarioController(MarioEnvironment):
 
         self.pyboy.send_input(self.release_button[action])
 
+    
 
 class MarioExpert:
     """
@@ -101,14 +102,54 @@ class MarioExpert:
 
         self.video = None
 
+    
+    def enemy_detect(self,arr):
+        enemy_positions = []
+        for row_idx, row in enumerate(arr):
+            for col_idx, elem in enumerate(row):
+                if elem == 15 :
+                    enemy_positions.append((row_idx, col_idx))
+        return (len(enemy_positions) > 0, enemy_positions)
+    
+    def tube_detect(self,arr):
+        enemy_positions = []
+        for row_idx, row in enumerate(arr):
+            for col_idx, elem in enumerate(row):
+                if elem == 14 :
+                    enemy_positions.append((row_idx, col_idx))
+        return (len(enemy_positions) > 0, enemy_positions)
+    
+    def obj_detect(self,arr,ele):
+        mario_positions = []
+        for row_idx, row in enumerate(arr):
+            for col_idx, elem in enumerate(row):
+                if elem == ele:
+                    mario_positions.append((row_idx, col_idx))
+        return mario_positions
+        
     def choose_action(self):
         state = self.environment.game_state()
-        frame = self.environment.grab_frame()
         game_area = self.environment.game_area()
+        # Get positions of Mario, tubes, and enemies
+        mario_positions = self.obj_detect(game_area, 1)  # Mario represented as 2x2 grid of 1s
+        _, enemy_positions = self.enemy_detect(game_area)  # Enemies detected, assuming 15 or 14
 
-        # Implement your code here to choose the best action
-        # time.sleep(0.1)
-        return random.randint(0, len(self.environment.valid_actions) - 1)
+        # Define distance thresholds for jumping
+        enemy_threshold = 2
+
+        # Rule 1: Check if Mario is close to an enemy and the enemy is to the right
+        for mario_pos in mario_positions:
+            mario_x, mario_y = mario_pos
+            # Check for enemies
+            for enemy_pos in enemy_positions:
+                enemy_x, enemy_y = enemy_pos
+                distance = abs(mario_x - enemy_x) + abs(mario_y - enemy_y)
+                if enemy_x > mario_x and distance <= enemy_threshold:
+                    return self.environment.valid_actions.index(WindowEvent.PRESS_BUTTON_A)
+              
+        # Default action if no conditions are met
+        return self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)
+
 
     def step(self):
         """
