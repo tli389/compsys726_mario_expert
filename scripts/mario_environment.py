@@ -89,9 +89,6 @@ class MarioEnvironment(PyboyEnvironment):
 
     def get_game_over(self):
         return self._read_m(0xC0A4) == 0x39
-    
-    def get_mario_direction(self):
-        return self._read_m(0xC20D) == 0x10 # 1 = facing right
 
     def get_mario_pose(self):
         return self._read_m(0xC203)
