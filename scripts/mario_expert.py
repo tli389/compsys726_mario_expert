@@ -106,9 +106,9 @@ class MarioController(MarioEnvironment):
     
     def mario_falling(self):
         return self._read_m(0xC207) == 0x02  # true for falling
-
+    
     def get_goomba_positions(self):
-        GOOMBA_TYPE = 0x00  # Replace with the actual type code for Goombas
+        GOOMBA_TYPE = 0x03  # Replace with the actual type code for Goombas
         OBJECT_TABLE_START = 0xD100  # Example starting address; adjust if necessary
         goomba_positions = []
         for index in range(10):  # Assuming a maximum of 10 objects; adjust if necessary
@@ -124,12 +124,44 @@ class MarioController(MarioEnvironment):
                 x_position = self._read_m(object_address + 3)  # X position at offset 3
                 # Store Goomba's position
                 goomba_positions.append((x_position, y_position))
-        return goomba_positions[0]
+        return goomba_positions
     
+    def get_enemy_positions(self, obj_type):
+        OBJECT_TABLE_START = 0xD100  # Example starting address; adjust if necessary
+        ENEMY_SIZE = 0x0B  # Each object occupies 11 bytes
+        MAX_ENEMIES = 10  # Assuming a maximum of 10 objects; adjust if necessary
+        positions = []
+
+        for index in range(MAX_ENEMIES):
+            object_address = OBJECT_TABLE_START + (index * ENEMY_SIZE)
+            object_type = self._read_m(object_address)
+
+            if object_type == obj_type:
+                y_position = self._read_m(object_address + 2)
+                x_position = self._read_m(object_address + 3)
+                positions.append((x_position, y_position))
+
+        return positions
+
     def is_enemy_near(self, rect):
-        enemy_x, enemy_y = self.get_goomba_positions()
-        if rect.collidepoint(enemy_x - self.find_mario()[0], self.find_mario()[1] - enemy_y):
-            return True
+        enemy_types = [0x00, 0x04, 0x42]  # Goomba, Nokobon, Bee
+        mario_x, mario_y = self.find_mario()
+
+        for obj_type in enemy_types:
+            enemy_positions = self.get_enemy_positions(obj_type)
+            for (enemy_x, enemy_y) in enemy_positions:
+                if rect.collidepoint(enemy_x - mario_x, mario_y - enemy_y):
+                    return True
+
+        return False
+    
+    def is_element_near(self, matrix):
+        # Search for the element within the defined rectangle
+        for row in range(8, 12 + 1):
+            for col in range(5, 14 + 1):
+                if matrix[row][col] == 18:
+                    return True
+
         return False
     
     def get_wall_height(self, game_area , lvl = 13):
@@ -141,7 +173,7 @@ class MarioController(MarioEnvironment):
         return wall_height
 
     def danger_of_gap(self, game_area):
-        for y in range(10, len(game_area)): #13
+        for y in range(6, len(game_area)): #13
             if game_area[y][11] != 0:
                 return False
         return True
@@ -192,6 +224,7 @@ class MarioExpert:
         self.action = [False] * 5
         self.action[1] = True
         self.action[4] = True
+        self.stuck = 0
 
     def set_jump(self, jump_type, size):
         self.jump_type = jump_type
@@ -205,11 +238,12 @@ class MarioExpert:
             mario_positions = self.environment.find_mario()
             x_pos = self.environment.game_state()["x_position"]
             mario_speed = x_pos - self.prev_pos
+
             enemy_positions = self.environment.get_goomba_positions()
             game_area = self.environment.game_area()
 
-            danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-13, -57, 50, 87))
-            danger_of_enemy_above = self.environment.is_enemy_near(pygame.Rect(-13, 50, 65, 50))
+            danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-13, -57, 50, 120)) or self.environment.is_element_near(game_area)
+            danger_of_enemy_above = self.environment.is_enemy_near(pygame.Rect(-13, -20, 50, 30))
             danger_of_gap = self.environment.danger_of_gap(game_area)
 
             #print(danger_of_enemy, danger_of_gap, mario_speed)
@@ -218,12 +252,13 @@ class MarioExpert:
                 self.set_jump(JumpType.NONE, -1)
             elif self.environment.may_mario_jump():
                 wall_height = self.environment.get_wall_height(game_area)
-                if danger_of_gap and mario_speed > 0:
-                    self.set_jump(JumpType.GAP, 50 - mario_speed if mario_speed < 2 else 1)
+                if danger_of_gap : #and mario_speed > 0:
+                    self.set_jump(JumpType.GAP, 20 - mario_speed)
                 elif mario_speed <= 0 and not danger_of_enemy_above and wall_height > 0:
                     self.set_jump(JumpType.WALL, wall_height + 7 if wall_height >= 2 else wall_height)
-                if danger_of_enemy:
+                elif danger_of_enemy:
                     self.set_jump(JumpType.ENEMY, 15)
+
             else:
                 self.jump_count += 1
 
