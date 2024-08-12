@@ -73,23 +73,32 @@ class MarioController(MarioEnvironment):
         self.valid_actions = valid_actions
         self.release_button = release_button
 
-    def run_action(self, action: int, jump_type) -> None:
+    def run_action(self, actions, jump_type):
         """
-        This is a very basic example of how this function could be implemented
-
-        As part of this assignment your job is to modify this function to better suit your needs
-
-        You can change the action type to whatever you want or need just remember the base control of the game is pushing buttons
+        Execute the given actions. Actions are specified as a list of booleans corresponding to valid_actions.
         """
-        
+        # Press all actions specified as True in the actions list
+        for index, action in enumerate(actions):
+            if action:
+                self.pyboy.send_input(self.valid_actions[index]) 
 
-        # Simply toggles the buttons being on or off for a duration of act_freq
-        self.pyboy.send_input(self.valid_actions[action])
-
+        # Keep the actions pressed for a duration of act_freq
         for _ in range(self.act_freq):
             self.pyboy.tick()
 
-        self.pyboy.send_input(self.release_button[action])
+        # Release all actions specified as True in the actions list
+        for index, action in enumerate(actions):
+            if action:
+                self.pyboy.send_input(self.release_button[index])
+
+
+        # # Simply toggles the buttons being on or off for a duration of act_freq
+        # self.pyboy.send_input(self.valid_actions[action])
+
+        # for _ in range(self.act_freq):
+        #     self.pyboy.tick()
+
+        # self.pyboy.send_input(self.release_button[action])
         
 
     def count_frame(self):
@@ -150,31 +159,51 @@ class MarioController(MarioEnvironment):
         for obj_type in enemy_types:
             enemy_positions = self.get_enemy_positions(obj_type)
             for (enemy_x, enemy_y) in enemy_positions:
-                if rect.collidepoint(enemy_x - mario_x, mario_y - enemy_y):
+                #print(mario_x, enemy_x)
+                if rect.collidepoint(enemy_x - mario_x, mario_y - enemy_y) :
                     return True
 
         return False
     
     def is_element_near(self, matrix):
         # Search for the element within the defined rectangle
-        for row in range(8, 12 + 1):
-            for col in range(5, 14 + 1):
-                if matrix[row][col] == 18:
+        for row in range(8, 14):
+            for col in range(8, 12):
+                if matrix[row][col] == 18 or  matrix[row][col] == 15 :
                     return True
 
         return False
     
-    def get_wall_height(self, game_area , lvl = 13):
-        y = lvl
+    def get_wall_height(self, game_area):
+        # Get the positions of Mario in the game area
+        mario_positions = np.argwhere(game_area == 1)
+
+        # Check if Mario is found in the game area
+        if mario_positions.size == 0:
+            # Handle the case where Mario is not found, e.g., return a default wall height
+            return 0  # or some other appropriate value based on your game's logic
+
+        # Extract the x and y coordinates of Mario
+        mario_x_coords = mario_positions[:, 1]  # Column indices
+        mario_y_coords = mario_positions[:, 0]  # Row indices
+
+        # Find the maximum y coordinate, which is the lowest row index where Mario is located
+        mario_ground_level = np.max(mario_y_coords)
+        y = mario_ground_level
         wall_height = 0
+
+        # Calculate the wall height based on the game area and Mario's position
         while y > 0 and game_area[y][11] != 0:
             wall_height += 1
             y -= 1
+
         return wall_height
 
+
+
     def danger_of_gap(self, game_area):
-        for y in range(6, len(game_area)): #13
-            if game_area[y][11] != 0:
+        for y in range(8, len(game_area)): #13
+            if game_area[y][10] != 0:
                 return False
         return True
     
@@ -218,12 +247,13 @@ class MarioExpert:
         self.environment = MarioController(headless=headless)
         self.video = None
         self.prev_pos = 0
+        self.prev_y_pos = 0
         self.jump_type = JumpType.NONE
         self.jump_count = 0
         self.jump_size = -1
-        self.action = [False] * 5
-        self.action[1] = True
-        self.action[4] = True
+        self.actions = [False] * 5
+        self.actions[1] = True
+        self.actions[4] = True
         self.stuck = 0
 
     def set_jump(self, jump_type, size):
@@ -237,23 +267,25 @@ class MarioExpert:
     def choose_action(self):
             mario_positions = self.environment.find_mario()
             x_pos = self.environment.game_state()["x_position"]
+            y_pos = mario_positions[1]
             mario_speed = x_pos - self.prev_pos
 
             enemy_positions = self.environment.get_goomba_positions()
             game_area = self.environment.game_area()
 
-            danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-13, -57, 50, 120)) or self.environment.is_element_near(game_area)
+            danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-25, -120, 62, 200)) or self.environment.is_element_near(game_area)
+             #danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-25, -120, 62, 200)) or self.environment.is_element_near(game_area)
             danger_of_enemy_above = self.environment.is_enemy_near(pygame.Rect(-13, -20, 50, 30))
             danger_of_gap = self.environment.danger_of_gap(game_area)
 
             #print(danger_of_enemy, danger_of_gap, mario_speed)
 
-            if self.environment.is_mario_on_ground() and self.jump_type != JumpType.NONE:
+            if self.environment.may_mario_jump() and self.jump_type != JumpType.NONE:
                 self.set_jump(JumpType.NONE, -1)
             elif self.environment.may_mario_jump():
                 wall_height = self.environment.get_wall_height(game_area)
                 if danger_of_gap : #and mario_speed > 0:
-                    self.set_jump(JumpType.GAP, 20 - mario_speed)
+                    self.set_jump(JumpType.GAP, 100 - mario_speed)
                 elif mario_speed <= 0 and not danger_of_enemy_above and wall_height > 0:
                     self.set_jump(JumpType.WALL, wall_height + 7 if wall_height >= 2 else wall_height)
                 elif danger_of_enemy:
@@ -261,16 +293,26 @@ class MarioExpert:
 
             else:
                 self.jump_count += 1
+                
 
-            action_index = self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)
-            if self.environment.mario_falling() and ((danger_of_enemy and danger_of_enemy_above) or danger_of_gap): 
-                action_index = self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_LEFT)
-            elif self.jump_type != JumpType.NONE and self.jump_count < self.jump_size: action_index = self.environment.valid_actions.index(WindowEvent.PRESS_BUTTON_A)
+
+            is_falling = (self.prev_y_pos < y_pos and self.jump_type == JumpType.NONE)
+
+            self.actions = [False] * len(self.environment.valid_actions)
+            if is_falling and ((danger_of_enemy and danger_of_enemy_above) or danger_of_gap): 
+                self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_LEFT)] = True
+            elif self.jump_type != JumpType.NONE and self.jump_count < self.jump_size: 
+                self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_BUTTON_A)] = True
+                if self.jump_type == JumpType.GAP:
+                    self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)] = True
             elif not(self.environment.mario_falling()) and not((danger_of_enemy_above and self.jump_type == JumpType.WALL)): 
-                action_index = self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)
+                self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)] = True
+            
                 
             self.prev_pos = x_pos
-            return action_index
+            # Update previous position
+            self.prev_y_pos = y_pos
+            return self.actions
 
 
     def step(self):

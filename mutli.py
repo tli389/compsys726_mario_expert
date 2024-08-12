@@ -13,3 +13,6 @@ for i in range(num_iterations):
     # Run the command
     print(f'Running iteration {i+1}/{num_iterations}: {command}')
     subprocess.run(command, shell=True)
+
+
+    
