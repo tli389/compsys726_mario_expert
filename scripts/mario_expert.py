@@ -92,16 +92,6 @@ class MarioController(MarioEnvironment):
             if action:
                 self.pyboy.send_input(self.release_button[index])
 
-
-        # # Simply toggles the buttons being on or off for a duration of act_freq
-        # self.pyboy.send_input(self.valid_actions[action])
-
-        # for _ in range(self.act_freq):
-        #     self.pyboy.tick()
-
-        # self.pyboy.send_input(self.release_button[action])
-        
-
     def count_frame(self):
         return self._read_m(0xDA00)
 
@@ -132,10 +122,8 @@ class MarioController(MarioEnvironment):
         for index in range(10):  # Assuming a maximum of 10 objects; adjust if necessary
             # Calculate the address for this object's properties
             object_address = OBJECT_TABLE_START + (index * 0x0B)  # Each object occupies 11 bytes
-            
             # Extract object type
             object_type = self._read_m(object_address)  # Read the object type
-
             if object_type == GOOMBA_TYPE:
                 # Extract Y and X position
                 y_position = self._read_m(object_address + 2)  # Y position at offset 2
@@ -185,92 +173,118 @@ class MarioController(MarioEnvironment):
     def get_wall_height(self, game_area):
         # Get the positions of Mario in the game area
         mario_positions = np.argwhere(game_area == 1)
-
         # Check if Mario is found in the game area
         if mario_positions.size == 0:
             # Handle the case where Mario is not found, e.g., return a default wall height
             return 0  # or some other appropriate value based on your game's logic
-
         # Extract the x and y coordinates of Mario
         mario_x_coords = mario_positions[:, 1]  # Column indices
         mario_y_coords = mario_positions[:, 0]  # Row indices
-
         # Find the maximum y coordinate, which is the lowest row index where Mario is located
         mario_ground_level = np.max(mario_y_coords)
         y = mario_ground_level
         wall_height = 0
-
         # Calculate the wall height based on the game area and Mario's position
         while y > 0 and game_area[y][10] != 0:
             wall_height += 1
             y -= 1
-
         return wall_height
+    
+    def wait_for_jump(self, game_area):
+        # Get the positions of Mario in the game area
+        mario_positions = np.argwhere(game_area == 1)
+        
+        # Check if Mario is found in the game area
+        if mario_positions.size == 0:
+            # Handle the case where Mario is not found, e.g., return a default wall height
+            return 0  # or some other appropriate value based on your game's logic
+        
+        # Extract the x and y coordinates of Mario
+        mario_x_coords = mario_positions[:, 1]  # Column indices
+        mario_y_coords = mario_positions[:, 0]  # Row indices
+        
+        # Find the maximum y coordinate, which is the lowest row index where Mario is located
+        mario_ground_level = np.max(mario_y_coords)
+        
+        # Initialize the y-coordinate to start checking from the top of the game area
+        y = 0
+        
+        # Loop through the rows in column 13 to find the first obstacle
+        while y < 15:  # Assuming the game area height is 20 rows
+            if game_area[y][13] == 10 or game_area[y][13] == 11 or game_area[y][13] == 12:
+                # Return the height difference between Mario's ground level and the obstacle
+                return mario_ground_level - y
+            y += 1
+        
+        # Return 0 if no obstacle is found
+        return 0
+
+
 
     def danger_of_gap(self, game_area):
-        for y in range(8, len(game_area)): #13
-            if game_area[y][10] != 0 :
-                return False
-        return True
+        # Get the positions of Mario in the game area
+        mario_positions = np.argwhere(game_area == 1)
+        # Check if Mario is found in the game area
+        if mario_positions.size == 0:
+            return False  # Mario not found, assume no danger
+        # Extract the x and y coordinates of Mario
+        mario_y_coords = mario_positions[:, 0]  # Row indices
+        mario_ground_level = np.max(mario_y_coords)  # The lowest row index where Mario is located
+
+        # Start checking from the row directly below Mario's current position
+        for y in range(mario_ground_level + 1, len(game_area)):
+            if game_area[y][12] != 0:  # Check if there's solid ground
+                return False  # No gap detected, Mario can land safely
+
+        return True  # Gap detected, no solid ground for Mario to land on
+    
+    def safe_to_land(self, game_area):
+        # Get the positions of Mario in the game area
+        mario_positions = np.argwhere(game_area == 1)
+
+        if mario_positions.size == 0:
+            return -1  # Return -1 if Mario is not found in the level scene
+
+        # Extract the minimum x coordinate and maximum y coordinate for Mario
+        mario_x_max = mario_positions[:, 1].min()  # Maximum column index where Mario is located
+        mario_y_max = mario_positions[:, 0].max()  # Maximum row index where Mario is located
+
+        # Check all columns in front of Mario
+        for x in range(mario_x_max + 1, game_area.shape[1]):
+            # Check rows below Mario for potential landing surfaces
+            landing_possible = False
+            for y in range(mario_y_max + 1, game_area.shape[0]):
+                if game_area[y, x] != 0:
+                    landing_possible = True
+                    break
+            
+            if landing_possible:
+                return True  # Found a landing spot in front of Mario
+
+        return False  # No landing spots detected in the path
     
     def should_jump(self, array):
         mario_positions = np.argwhere(array == 1)
-        
         if mario_positions.size == 0:
             return -1  # Return -1 if Mario is not found in the level scene
-        
         # Get the x-coordinate (column index) of Mario
         mario_x = mario_positions[0][1]
-        
         # Determine Mario's ground level
         mario_y = self.find_mario_ground_level(array)
         ground_level = mario_y + 1  # Assume Mario's y-position is one row above the ground
-        
         # Ensure the ground level is within bounds
         if ground_level >= array.shape[0]:
             return False  # No jump needed if ground level is out of bounds
-        
         # Scan the columns in front of Mario for potential gaps
-        for offset in range(1, 3):  # Check the next 1 or 2 tiles in front
+        for offset in range(1, 4):  # Check the next 1 or 2 tiles in front
             next_x = mario_x + offset
-            
             # Ensure next_x is within array bounds
             if next_x < array.shape[1]:
                 # Check for gaps at ground level and the row below it
-                if array[ground_level, next_x] == 0 or (ground_level + 1 < array.shape[0] and array[ground_level + 1, next_x] == 0):
+                if array[ground_level, next_x] == 0:
                     return True  # There's a gap, so Mario should jump
-
         return False  # No gap detected in the next two tiles
     
-    def can_go_forward(self, array):
-        mario_positions = np.argwhere(array == 1)
-        
-        if mario_positions.size == 0:
-            return -1  # Return -1 if Mario is not found in the level scene
-        
-        # Get the x-coordinate (column index) of Mario
-        mario_x = mario_positions[0][1]
-        
-        # Determine Mario's ground level
-        mario_y = self.find_mario_ground_level(array)
-        ground_level = mario_y + 1  # Assume Mario's y-position is one row above the ground
-        
-        # Ensure the ground level is within bounds
-        if ground_level >= array.shape[0]:
-            return False  # No jump needed if ground level is out of bounds
-        
-        # Check the columns in front of Mario
-        for offset in range(1, array.shape[1] - mario_x):  # Scan all tiles in front
-            next_x = mario_x + offset
-            
-            # Ensure next_x is within array bounds
-            if next_x < array.shape[1]:
-                # Check for obstacles or gaps at ground level and the row below it
-                if array[ground_level, next_x] != 10 or (ground_level + 1 < array.shape[0] and array[ground_level + 1, next_x] != 10):
-                    return False  # An obstacle or gap detected, Mario should not proceed
-
-        return True  # No obstacles or gaps detected, and all elements ahead are 10
-
     def is_element_infront(self, game_area):
             # Get the positions of Mario in the game area
             mario_positions = np.argwhere(game_area == 1)
@@ -289,6 +303,27 @@ class MarioController(MarioEnvironment):
                     return False  # An obstacle detected in Mario's current row
 
             return True  # No obstacles detected in the path
+    
+    def enemy_close(self, game_area):
+        # Get the positions of Mario in the game area
+        mario_positions = np.argwhere(game_area == 1)
+
+        if mario_positions.size == 0:
+            return -1  # Return -1 if Mario is not found in the level scene
+
+        # Extract the maximum x and y coordinates for Mario
+        mario_x_max = mario_positions[:, 1].max()  # Maximum column index where Mario is located
+        mario_y_max = mario_positions[:, 0].max()  # Maximum row index where Mario is located
+
+        # Check the block directly in front of Mario
+        x = mario_x_max + 1
+        if x < game_area.shape[1]:  # Ensure we're within bounds
+            if game_area[mario_y_max, x] in [15, 16, 19]:  # Check if the block contains an enemy
+                return True  # Enemy detected
+
+        return False  # No enemies detected in the block directly in front
+
+
 
     
     def find_mario_ground_level(self, game_area):
@@ -308,39 +343,6 @@ class MarioController(MarioEnvironment):
 
         return -1  # Return -1 if no ground level is found
     
-    def extract_x_coordinates(self, grid):
-        mario_x = None
-        closest_x_15 = None
-        
-        # Traverse the grid to find the top-left corner of Mario (2x2 block represented by element 1)
-        for row_idx in range(len(grid) - 1):  # -1 to avoid index out of range for 2x2 block
-            for col_idx in range(len(grid[0]) - 1):  # -1 to avoid index out of range for 2x2 block
-                if (grid[row_idx][col_idx] == 1 and 
-                    grid[row_idx][col_idx+1] == 1 and 
-                    grid[row_idx+1][col_idx] == 1 and 
-                    grid[row_idx+1][col_idx+1] == 1):
-                    
-                    mario_x = col_idx
-                    break
-            if mario_x is not None:
-                break
-
-        # Now, find the right-most, closest 15 to Mario
-        for row in grid:
-            for col_idx in range(len(grid[0]) - 1, -1, -1):  # Traverse from right to left
-                if row[col_idx] == 15:
-                    if closest_x_15 is None or (abs(col_idx - mario_x) < abs(closest_x_15 - mario_x)):
-                        closest_x_15 = col_idx
-                    break
-
-        return mario_x > closest_x_15
-
-
-    def get_obs(self):
-        return self.is_mario_on_ground, self.may_mario_jump, self.find_mario, self.get_goomba_positions, self.mario_falling
-
-    
-
 class MarioExpert:
     """
     The MarioExpert class represents an expert agent for playing the Mario game.
@@ -364,8 +366,6 @@ class MarioExpert:
         self.jump_count = 0
         self.jump_size = -1
         self.actions = [False] * 5
-        self.actions[1] = True
-        self.actions[4] = True
         self.stuck = 0
 
     def set_jump(self, jump_type, size):
@@ -381,54 +381,61 @@ class MarioExpert:
             x_pos = self.environment.game_state()["x_position"]
             y_pos = mario_positions[1]
             mario_speed = x_pos - self.prev_pos
-
-            enemy_positions = self.environment.get_goomba_positions()
             game_area = self.environment.game_area()
-
-            danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-25, -120, 62, 200))
-             #danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-25, -120, 62, 200)) or self.environment.is_element_near(game_area)
-            danger_of_enemy_above = self.environment.is_enemy_near(pygame.Rect(-13, -20, 50, 30))
+            danger_of_enemy = self.environment.is_enemy_near(pygame.Rect(-25, -120, 62, 200)) or self.environment.is_element_near(game_area)
             danger_of_gap = self.environment.danger_of_gap(game_area)
+            is_falling = (self.prev_y_pos < y_pos)
+            self.actions = [False] * len(self.environment.valid_actions)
 
-            #print(danger_of_enemy, danger_of_gap, mario_speed)
 
             if self.environment.is_mario_on_ground() and self.jump_type != JumpType.NONE:
                 self.set_jump(JumpType.NONE, -1)
             elif self.environment.is_mario_on_ground():
                 wall_height = self.environment.get_wall_height(game_area)
-                if (danger_of_gap or self.environment.may_mario_jump(game_area)) and (self.environment.game_state()["stage"] == 1):#and mario_speed > 0:
+                height_diff = self.environment.wait_for_jump(game_area)
+                if (self.environment.game_state()["stage"] == 2) and x_pos > 1100 and x_pos < 1500:
+                    if height_diff < 2:
+                        self.set_jump(JumpType.GAP, 50 - mario_speed)
+                    else:
+                        return self.actions
+                if (danger_of_gap or self.environment.may_mario_jump(game_area)):
                     self.set_jump(JumpType.GAP, 50 - mario_speed)
-                elif self.environment.should_jump(game_area):
-                    self.set_jump(JumpType.NAV, 25)
-                elif   wall_height > 0:
+                elif  wall_height > 0:
                     self.set_jump(JumpType.WALL, wall_height + 7 if wall_height >= 2 else wall_height)
-                elif danger_of_enemy or self.environment.is_element_near(game_area):
+                elif danger_of_enemy :
                     self.set_jump(JumpType.ENEMY, 20)
+                elif self.environment.should_jump(game_area): #and x_pos < 400:
+                    self.set_jump(JumpType.NAV, 15)
             else:
                 self.jump_count += 1
                 
-
-
-            is_falling = (self.prev_y_pos < y_pos)
-            self.actions = [False] * len(self.environment.valid_actions)
-            if is_falling and danger_of_gap and (self.environment.game_state()["stage"] == 1): 
-                self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_LEFT)] = True 
+            
+            if is_falling and (danger_of_gap or danger_of_enemy):
+                if self.environment.safe_to_land(game_area)  :
+                    self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_DOWN)] = True
+                else:
+                    self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_LEFT)] = True 
             elif (self.jump_type != JumpType.NONE and self.jump_count < self.jump_size):
                 if (self.environment.game_state()["stage"] == 2) and self.environment.is_element_infront(game_area) and x_pos > 600: 
                     self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)] = True
                     self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_BUTTON_B)] = True
+                elif self.environment.enemy_close(game_area) and x_pos > 1200:
+                    self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_LEFT)] = True 
                 else:
                     self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_BUTTON_A)] = True
                     self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)] = True
                     self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_BUTTON_B)] = True
-                
             else :
                 self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)] = True
                 self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_BUTTON_B)] = True
 
+            if x_pos == 1940 and (self.environment.game_state()["stage"] == 2):
+                self.actions = [False] * len(self.environment.valid_actions)
+                self.actions[self.environment.valid_actions.index(WindowEvent.PRESS_ARROW_RIGHT)] = True
+                return self.actions
+            
             self.prev_pos = x_pos
             self.prev_y_pos = y_pos
-            print(self.environment._read_m(0xC209))
             return self.actions
 
 
